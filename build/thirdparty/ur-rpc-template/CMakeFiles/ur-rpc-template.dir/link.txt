@@ -1,0 +1,2 @@
+/usr/bin/ar qc libur-rpc-template.a CMakeFiles/ur-rpc-template.dir/ur-rpc-template.c.o
+/usr/bin/ranlib libur-rpc-template.a

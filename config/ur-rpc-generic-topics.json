@@ -1,0 +1,12 @@
+{
+    "process_id": "ur-mavdiscovery",
+    "broker_url": "127.0.0.1",
+    "broker_port": 1884,
+    "heartbeat_topic": "ur-system-heartbeat",
+    "response_topic": "ur-system-responses",
+    "query_topic": "ur-system-queries",
+    "ip_query_topic": "ur-network-ip_queries",
+    "module_update_topic": "ur-system/updates",
+    "heartbeat_interval": 5000,
+    "heartbeat_timeout": 10000
+}

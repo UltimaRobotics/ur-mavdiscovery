@@ -1,0 +1,1100 @@
+#else
+int handle__packet(struct mosquitto *mosq);
+int handle__connack(struct mosquitto *mosq);
+int handle__pubackcomp(struct mosquitto *mosq, const char *type);
+int handle__publish(struct mosquitto *mosq);
+#endif
+int handle__pubrec(struct mosquitto *mosq);
+int handle__pubrel(struct mosquitto_db *db, struct mosquitto *mosq);
+int handle__suback(struct mosquitto *mosq);
+int handle__unsuback(struct mosquitto *mosq);
+
+
+#endif
+
+
+
+--------------------------------------------------------------------------------
+File: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_connect.c
+Path: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_connect.c
+--------------------------------------------------------------------------------
+/*
+Copyright (c) 2009-2018 Roger Light <roger@atchoo.org>
+
+All rights reserved. This program and the accompanying materials
+are made available under the terms of the Eclipse Public License v1.0
+and Eclipse Distribution License v1.0 which accompany this distribution.
+
+The Eclipse Public License is available at
+   http://www.eclipse.org/legal/epl-v10.html
+and the Eclipse Distribution License is available at
+  http://www.eclipse.org/org/documents/edl-v10.php.
+
+Contributors:
+   Roger Light - initial implementation and documentation.
+*/
+
+#include "config.h"
+
+#include <assert.h>
+#include <string.h>
+
+#ifdef WITH_BROKER
+#  include "mosquitto_broker_internal.h"
+#endif
+
+#include "logging_mosq.h"
+#include "memory_mosq.h"
+#include "mosquitto.h"
+#include "mosquitto_internal.h"
+#include "mqtt3_protocol.h"
+#include "packet_mosq.h"
+
+int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session)
+{
+	struct mosquitto__packet *packet = NULL;
+	int payloadlen;
+	uint8_t will = 0;
+	uint8_t byte;
+	int rc;
+	uint8_t version;
+	char *clientid, *username, *password;
+	int headerlen;
+
+	assert(mosq);
+	assert(mosq->id);
+
+#if defined(WITH_BROKER) && defined(WITH_BRIDGE)
+	if(mosq->bridge){
+		clientid = mosq->bridge->remote_clientid;
+		username = mosq->bridge->remote_username;
+		password = mosq->bridge->remote_password;
+	}else{
+		clientid = mosq->id;
+		username = mosq->username;
+		password = mosq->password;
+	}
+#else
+	clientid = mosq->id;
+	username = mosq->username;
+	password = mosq->password;
+#endif
+
+	if(mosq->protocol == mosq_p_mqtt31){
+		version = MQTT_PROTOCOL_V31;
+		headerlen = 12;
+	}else if(mosq->protocol == mosq_p_mqtt311){
+		version = MQTT_PROTOCOL_V311;
+		headerlen = 10;
+	}else{
+		return MOSQ_ERR_INVAL;
+	}
+
+	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
+	if(!packet) return MOSQ_ERR_NOMEM;
+
+	payloadlen = 2+strlen(clientid);
+	if(mosq->will){
+		will = 1;
+		assert(mosq->will->topic);
+
+		payloadlen += 2+strlen(mosq->will->topic) + 2+mosq->will->payloadlen;
+	}
+	if(username){
+		payloadlen += 2+strlen(username);
+		if(password){
+			payloadlen += 2+strlen(password);
+		}
+	}
+
+	packet->command = CONNECT;
+	packet->remaining_length = headerlen+payloadlen;
+	rc = packet__alloc(packet);
+	if(rc){
+		mosquitto__free(packet);
+		return rc;
+	}
+
+	/* Variable header */
+	if(version == MQTT_PROTOCOL_V31){
+		packet__write_string(packet, PROTOCOL_NAME_v31, strlen(PROTOCOL_NAME_v31));
+	}else if(version == MQTT_PROTOCOL_V311){
+		packet__write_string(packet, PROTOCOL_NAME_v311, strlen(PROTOCOL_NAME_v311));
+	}
+#if defined(WITH_BROKER) && defined(WITH_BRIDGE)
+	if(mosq->bridge && mosq->bridge->try_private && mosq->bridge->try_private_accepted){
+		version |= 0x80;
+	}else{
+	}
+#endif
+	packet__write_byte(packet, version);
+	byte = (clean_session&0x1)<<1;
+	if(will){
+		byte = byte | ((mosq->will->retain&0x1)<<5) | ((mosq->will->qos&0x3)<<3) | ((will&0x1)<<2);
+	}
+	if(username){
+		byte = byte | 0x1<<7;
+		if(mosq->password){
+			byte = byte | 0x1<<6;
+		}
+	}
+	packet__write_byte(packet, byte);
+	packet__write_uint16(packet, keepalive);
+
+	/* Payload */
+	packet__write_string(packet, clientid, strlen(clientid));
+	if(will){
+		packet__write_string(packet, mosq->will->topic, strlen(mosq->will->topic));
+		packet__write_string(packet, (const char *)mosq->will->payload, mosq->will->payloadlen);
+	}
+	if(username){
+		packet__write_string(packet, username, strlen(username));
+		if(password){
+			packet__write_string(packet, password, strlen(password));
+		}
+	}
+
+	mosq->keepalive = keepalive;
+#ifdef WITH_BROKER
+# ifdef WITH_BRIDGE
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Bridge %s sending CONNECT", clientid);
+# endif
+#else
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending CONNECT", clientid);
+#endif
+	return packet__queue(mosq, packet);
+}
+
+
+
+
+--------------------------------------------------------------------------------
+File: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_disconnect.c
+Path: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_disconnect.c
+--------------------------------------------------------------------------------
+/*
+Copyright (c) 2009-2018 Roger Light <roger@atchoo.org>
+
+All rights reserved. This program and the accompanying materials
+are made available under the terms of the Eclipse Public License v1.0
+and Eclipse Distribution License v1.0 which accompany this distribution.
+
+The Eclipse Public License is available at
+   http://www.eclipse.org/legal/epl-v10.html
+and the Eclipse Distribution License is available at
+  http://www.eclipse.org/org/documents/edl-v10.php.
+
+Contributors:
+   Roger Light - initial implementation and documentation.
+*/
+
+#include "config.h"
+
+#include <assert.h>
+
+#ifdef WITH_BROKER
+#  include "mosquitto_broker_internal.h"
+#endif
+
+#include "mosquitto.h"
+#include "mosquitto_internal.h"
+#include "logging_mosq.h"
+#include "mqtt3_protocol.h"
+#include "send_mosq.h"
+
+
+int send__disconnect(struct mosquitto *mosq)
+{
+	assert(mosq);
+#ifdef WITH_BROKER
+# ifdef WITH_BRIDGE
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Bridge %s sending DISCONNECT", mosq->id);
+# endif
+#else
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending DISCONNECT", mosq->id);
+#endif
+	return send__simple_command(mosq, DISCONNECT);
+}
+
+
+
+
+--------------------------------------------------------------------------------
+File: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_mosq.c
+Path: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_mosq.c
+--------------------------------------------------------------------------------
+/*
+Copyright (c) 2009-2018 Roger Light <roger@atchoo.org>
+
+All rights reserved. This program and the accompanying materials
+are made available under the terms of the Eclipse Public License v1.0
+and Eclipse Distribution License v1.0 which accompany this distribution.
+ 
+The Eclipse Public License is available at
+   http://www.eclipse.org/legal/epl-v10.html
+and the Eclipse Distribution License is available at
+  http://www.eclipse.org/org/documents/edl-v10.php.
+ 
+Contributors:
+   Roger Light - initial implementation and documentation.
+*/
+
+#include "config.h"
+
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+#ifdef WITH_BROKER
+#  include "mosquitto_broker_internal.h"
+#  include "sys_tree.h"
+#else
+#  define G_PUB_BYTES_SENT_INC(A)
+#endif
+
+#include "mosquitto.h"
+#include "mosquitto_internal.h"
+#include "logging_mosq.h"
+#include "mqtt3_protocol.h"
+#include "memory_mosq.h"
+#include "net_mosq.h"
+#include "packet_mosq.h"
+#include "send_mosq.h"
+#include "time_mosq.h"
+#include "util_mosq.h"
+
+int send__pingreq(struct mosquitto *mosq)
+{
+	int rc;
+	assert(mosq);
+#ifdef WITH_BROKER
+	log__printf(NULL, MOSQ_LOG_DEBUG, "Sending PINGREQ to %s", mosq->id);
+#else
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending PINGREQ", mosq->id);
+#endif
+	rc = send__simple_command(mosq, PINGREQ);
+	if(rc == MOSQ_ERR_SUCCESS){
+		mosq->ping_t = mosquitto_time();
+	}
+	return rc;
+}
+
+int send__pingresp(struct mosquitto *mosq)
+{
+#ifdef WITH_BROKER
+	if(mosq) log__printf(NULL, MOSQ_LOG_DEBUG, "Sending PINGRESP to %s", mosq->id);
+#else
+	if(mosq) log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending PINGRESP", mosq->id);
+#endif
+	return send__simple_command(mosq, PINGRESP);
+}
+
+int send__puback(struct mosquitto *mosq, uint16_t mid)
+{
+#ifdef WITH_BROKER
+	if(mosq) log__printf(NULL, MOSQ_LOG_DEBUG, "Sending PUBACK to %s (Mid: %d)", mosq->id, mid);
+#else
+	if(mosq) log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending PUBACK (Mid: %d)", mosq->id, mid);
+#endif
+	return send__command_with_mid(mosq, PUBACK, mid, false);
+}
+
+int send__pubcomp(struct mosquitto *mosq, uint16_t mid)
+{
+#ifdef WITH_BROKER
+	if(mosq) log__printf(NULL, MOSQ_LOG_DEBUG, "Sending PUBCOMP to %s (Mid: %d)", mosq->id, mid);
+#else
+	if(mosq) log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending PUBCOMP (Mid: %d)", mosq->id, mid);
+#endif
+	return send__command_with_mid(mosq, PUBCOMP, mid, false);
+}
+
+
+int send__pubrec(struct mosquitto *mosq, uint16_t mid)
+{
+#ifdef WITH_BROKER
+	if(mosq) log__printf(NULL, MOSQ_LOG_DEBUG, "Sending PUBREC to %s (Mid: %d)", mosq->id, mid);
+#else
+	if(mosq) log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending PUBREC (Mid: %d)", mosq->id, mid);
+#endif
+	return send__command_with_mid(mosq, PUBREC, mid, false);
+}
+
+int send__pubrel(struct mosquitto *mosq, uint16_t mid)
+{
+#ifdef WITH_BROKER
+	if(mosq) log__printf(NULL, MOSQ_LOG_DEBUG, "Sending PUBREL to %s (Mid: %d)", mosq->id, mid);
+#else
+	if(mosq) log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending PUBREL (Mid: %d)", mosq->id, mid);
+#endif
+	return send__command_with_mid(mosq, PUBREL|2, mid, false);
+}
+
+/* For PUBACK, PUBCOMP, PUBREC, and PUBREL */
+int send__command_with_mid(struct mosquitto *mosq, uint8_t command, uint16_t mid, bool dup)
+{
+	struct mosquitto__packet *packet = NULL;
+	int rc;
+
+	assert(mosq);
+	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
+	if(!packet) return MOSQ_ERR_NOMEM;
+
+	packet->command = command;
+	if(dup){
+		packet->command |= 8;
+	}
+	packet->remaining_length = 2;
+	rc = packet__alloc(packet);
+	if(rc){
+		mosquitto__free(packet);
+		return rc;
+	}
+
+	packet->payload[packet->pos+0] = MOSQ_MSB(mid);
+	packet->payload[packet->pos+1] = MOSQ_LSB(mid);
+
+	return packet__queue(mosq, packet);
+}
+
+/* For DISCONNECT, PINGREQ and PINGRESP */
+int send__simple_command(struct mosquitto *mosq, uint8_t command)
+{
+	struct mosquitto__packet *packet = NULL;
+	int rc;
+
+	assert(mosq);
+	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
+	if(!packet) return MOSQ_ERR_NOMEM;
+
+	packet->command = command;
+	packet->remaining_length = 0;
+
+	rc = packet__alloc(packet);
+	if(rc){
+		mosquitto__free(packet);
+		return rc;
+	}
+
+	return packet__queue(mosq, packet);
+}
+
+
+
+
+--------------------------------------------------------------------------------
+File: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_mosq.h
+Path: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_mosq.h
+--------------------------------------------------------------------------------
+/*
+Copyright (c) 2010-2018 Roger Light <roger@atchoo.org>
+
+All rights reserved. This program and the accompanying materials
+are made available under the terms of the Eclipse Public License v1.0
+and Eclipse Distribution License v1.0 which accompany this distribution.
+ 
+The Eclipse Public License is available at
+   http://www.eclipse.org/legal/epl-v10.html
+and the Eclipse Distribution License is available at
+  http://www.eclipse.org/org/documents/edl-v10.php.
+ 
+Contributors:
+   Roger Light - initial implementation and documentation.
+*/
+#ifndef SEND_MOSQ_H
+#define SEND_MOSQ_H
+
+#include "mosquitto.h"
+
+int send__simple_command(struct mosquitto *mosq, uint8_t command);
+int send__command_with_mid(struct mosquitto *mosq, uint8_t command, uint16_t mid, bool dup);
+int send__real_publish(struct mosquitto *mosq, uint16_t mid, const char *topic, uint32_t payloadlen, const void *payload, int qos, bool retain, bool dup);
+
+int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session);
+int send__disconnect(struct mosquitto *mosq);
+int send__pingreq(struct mosquitto *mosq);
+int send__pingresp(struct mosquitto *mosq);
+int send__puback(struct mosquitto *mosq, uint16_t mid);
+int send__pubcomp(struct mosquitto *mosq, uint16_t mid);
+int send__publish(struct mosquitto *mosq, uint16_t mid, const char *topic, uint32_t payloadlen, const void *payload, int qos, bool retain, bool dup);
+int send__pubrec(struct mosquitto *mosq, uint16_t mid);
+int send__pubrel(struct mosquitto *mosq, uint16_t mid);
+int send__subscribe(struct mosquitto *mosq, int *mid, const char *topic, uint8_t topic_qos);
+int send__unsubscribe(struct mosquitto *mosq, int *mid, const char *topic);
+
+#endif
+
+
+
+--------------------------------------------------------------------------------
+File: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_publish.c
+Path: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_publish.c
+--------------------------------------------------------------------------------
+/*
+Copyright (c) 2009-2018 Roger Light <roger@atchoo.org>
+
+All rights reserved. This program and the accompanying materials
+are made available under the terms of the Eclipse Public License v1.0
+and Eclipse Distribution License v1.0 which accompany this distribution.
+
+The Eclipse Public License is available at
+   http://www.eclipse.org/legal/epl-v10.html
+and the Eclipse Distribution License is available at
+  http://www.eclipse.org/org/documents/edl-v10.php.
+
+Contributors:
+   Roger Light - initial implementation and documentation.
+*/
+
+#include "config.h"
+
+#include <assert.h>
+#include <string.h>
+
+#ifdef WITH_BROKER
+#  include "mosquitto_broker_internal.h"
+#  include "sys_tree.h"
+#else
+#  define G_PUB_BYTES_SENT_INC(A)
+#endif
+
+#include "mosquitto.h"
+#include "mosquitto_internal.h"
+#include "logging_mosq.h"
+#include "mqtt3_protocol.h"
+#include "memory_mosq.h"
+#include "net_mosq.h"
+#include "packet_mosq.h"
+#include "send_mosq.h"
+
+
+int send__publish(struct mosquitto *mosq, uint16_t mid, const char *topic, uint32_t payloadlen, const void *payload, int qos, bool retain, bool dup)
+{
+#ifdef WITH_BROKER
+	size_t len;
+#ifdef WITH_BRIDGE
+	int i;
+	struct mosquitto__bridge_topic *cur_topic;
+	bool match;
+	int rc;
+	char *mapped_topic = NULL;
+	char *topic_temp = NULL;
+#endif
+#endif
+	assert(mosq);
+	assert(topic);
+
+#if defined(WITH_BROKER) && defined(WITH_WEBSOCKETS)
+	if(mosq->sock == INVALID_SOCKET && !mosq->wsi) return MOSQ_ERR_NO_CONN;
+#else
+	if(mosq->sock == INVALID_SOCKET) return MOSQ_ERR_NO_CONN;
+#endif
+
+#ifdef WITH_BROKER
+	if(mosq->listener && mosq->listener->mount_point){
+		len = strlen(mosq->listener->mount_point);
+		if(len < strlen(topic)){
+			topic += len;
+		}else{
+			/* Invalid topic string. Should never happen, but silently swallow the message anyway. */
+			return MOSQ_ERR_SUCCESS;
+		}
+	}
+#ifdef WITH_BRIDGE
+	if(mosq->bridge && mosq->bridge->topics && mosq->bridge->topic_remapping){
+		for(i=0; i<mosq->bridge->topic_count; i++){
+			cur_topic = &mosq->bridge->topics[i];
+			if((cur_topic->direction == bd_both || cur_topic->direction == bd_out)
+					&& (cur_topic->remote_prefix || cur_topic->local_prefix)){
+				/* Topic mapping required on this topic if the message matches */
+
+				rc = mosquitto_topic_matches_sub(cur_topic->local_topic, topic, &match);
+				if(rc){
+					return rc;
+				}
+				if(match){
+					mapped_topic = mosquitto__strdup(topic);
+					if(!mapped_topic) return MOSQ_ERR_NOMEM;
+					if(cur_topic->local_prefix){
+						/* This prefix needs removing. */
+						if(!strncmp(cur_topic->local_prefix, mapped_topic, strlen(cur_topic->local_prefix))){
+							topic_temp = mosquitto__strdup(mapped_topic+strlen(cur_topic->local_prefix));
+							mosquitto__free(mapped_topic);
+							if(!topic_temp){
+								return MOSQ_ERR_NOMEM;
+							}
+							mapped_topic = topic_temp;
+						}
+					}
+
+					if(cur_topic->remote_prefix){
+						/* This prefix needs adding. */
+						len = strlen(mapped_topic) + strlen(cur_topic->remote_prefix)+1;
+						topic_temp = mosquitto__malloc(len+1);
+						if(!topic_temp){
+							mosquitto__free(mapped_topic);
+							return MOSQ_ERR_NOMEM;
+						}
+						snprintf(topic_temp, len, "%s%s", cur_topic->remote_prefix, mapped_topic);
+						topic_temp[len] = '\0';
+						mosquitto__free(mapped_topic);
+						mapped_topic = topic_temp;
+					}
+					log__printf(NULL, MOSQ_LOG_DEBUG, "Sending PUBLISH to %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", mosq->id, dup, qos, retain, mid, mapped_topic, (long)payloadlen);
+					G_PUB_BYTES_SENT_INC(payloadlen);
+					rc =  send__real_publish(mosq, mid, mapped_topic, payloadlen, payload, qos, retain, dup);
+					mosquitto__free(mapped_topic);
+					return rc;
+				}
+			}
+		}
+	}
+#endif
+	log__printf(NULL, MOSQ_LOG_DEBUG, "Sending PUBLISH to %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", mosq->id, dup, qos, retain, mid, topic, (long)payloadlen);
+	G_PUB_BYTES_SENT_INC(payloadlen);
+#else
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending PUBLISH (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", mosq->id, dup, qos, retain, mid, topic, (long)payloadlen);
+#endif
+
+	return send__real_publish(mosq, mid, topic, payloadlen, payload, qos, retain, dup);
+}
+
+
+int send__real_publish(struct mosquitto *mosq, uint16_t mid, const char *topic, uint32_t payloadlen, const void *payload, int qos, bool retain, bool dup)
+{
+	struct mosquitto__packet *packet = NULL;
+	int packetlen;
+	int rc;
+
+	assert(mosq);
+	assert(topic);
+
+	packetlen = 2+strlen(topic) + payloadlen;
+	if(qos > 0) packetlen += 2; /* For message id */
+	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
+	if(!packet) return MOSQ_ERR_NOMEM;
+
+	packet->mid = mid;
+	packet->command = PUBLISH | ((dup&0x1)<<3) | (qos<<1) | retain;
+	packet->remaining_length = packetlen;
+	rc = packet__alloc(packet);
+	if(rc){
+		mosquitto__free(packet);
+		return rc;
+	}
+	/* Variable header (topic string) */
+	packet__write_string(packet, topic, strlen(topic));
+	if(qos > 0){
+		packet__write_uint16(packet, mid);
+	}
+
+	/* Payload */
+	if(payloadlen){
+		packet__write_bytes(packet, payload, payloadlen);
+	}
+
+	return packet__queue(mosq, packet);
+}
+
+
+
+--------------------------------------------------------------------------------
+File: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_subscribe.c
+Path: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_subscribe.c
+--------------------------------------------------------------------------------
+/*
+Copyright (c) 2009-2018 Roger Light <roger@atchoo.org>
+
+All rights reserved. This program and the accompanying materials
+are made available under the terms of the Eclipse Public License v1.0
+and Eclipse Distribution License v1.0 which accompany this distribution.
+
+The Eclipse Public License is available at
+   http://www.eclipse.org/legal/epl-v10.html
+and the Eclipse Distribution License is available at
+  http://www.eclipse.org/org/documents/edl-v10.php.
+
+Contributors:
+   Roger Light - initial implementation and documentation.
+*/
+
+#include "config.h"
+
+#include <assert.h>
+#include <string.h>
+
+#ifdef WITH_BROKER
+#  include "mosquitto_broker_internal.h"
+#endif
+
+#include "mosquitto.h"
+#include "mosquitto_internal.h"
+#include "logging_mosq.h"
+#include "memory_mosq.h"
+#include "mqtt3_protocol.h"
+#include "packet_mosq.h"
+#include "util_mosq.h"
+
+
+int send__subscribe(struct mosquitto *mosq, int *mid, const char *topic, uint8_t topic_qos)
+{
+	/* FIXME - only deals with a single topic */
+	struct mosquitto__packet *packet = NULL;
+	uint32_t packetlen;
+	uint16_t local_mid;
+	int rc;
+
+	assert(mosq);
+	assert(topic);
+
+	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
+	if(!packet) return MOSQ_ERR_NOMEM;
+
+	packetlen = 2 + 2+strlen(topic) + 1;
+
+	packet->command = SUBSCRIBE | (1<<1);
+	packet->remaining_length = packetlen;
+	rc = packet__alloc(packet);
+	if(rc){
+		mosquitto__free(packet);
+		return rc;
+	}
+
+	/* Variable header */
+	local_mid = mosquitto__mid_generate(mosq);
+	if(mid) *mid = (int)local_mid;
+	packet__write_uint16(packet, local_mid);
+
+	/* Payload */
+	packet__write_string(packet, topic, strlen(topic));
+	packet__write_byte(packet, topic_qos);
+
+#ifdef WITH_BROKER
+# ifdef WITH_BRIDGE
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Bridge %s sending SUBSCRIBE (Mid: %d, Topic: %s, QoS: %d)", mosq->id, local_mid, topic, topic_qos);
+# endif
+#else
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending SUBSCRIBE (Mid: %d, Topic: %s, QoS: %d)", mosq->id, local_mid, topic, topic_qos);
+#endif
+
+	return packet__queue(mosq, packet);
+}
+
+
+
+
+--------------------------------------------------------------------------------
+File: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_unsubscribe.c
+Path: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/send_unsubscribe.c
+--------------------------------------------------------------------------------
+/*
+Copyright (c) 2009-2018 Roger Light <roger@atchoo.org>
+
+All rights reserved. This program and the accompanying materials
+are made available under the terms of the Eclipse Public License v1.0
+and Eclipse Distribution License v1.0 which accompany this distribution.
+
+The Eclipse Public License is available at
+   http://www.eclipse.org/legal/epl-v10.html
+and the Eclipse Distribution License is available at
+  http://www.eclipse.org/org/documents/edl-v10.php.
+
+Contributors:
+   Roger Light - initial implementation and documentation.
+*/
+
+#include "config.h"
+
+#include <assert.h>
+#include <string.h>
+
+#ifdef WITH_BROKER
+#  include "mosquitto_broker_internal.h"
+#endif
+
+#include "mosquitto.h"
+#include "logging_mosq.h"
+#include "memory_mosq.h"
+#include "mqtt3_protocol.h"
+#include "packet_mosq.h"
+#include "util_mosq.h"
+
+
+int send__unsubscribe(struct mosquitto *mosq, int *mid, const char *topic)
+{
+	/* FIXME - only deals with a single topic */
+	struct mosquitto__packet *packet = NULL;
+	uint32_t packetlen;
+	uint16_t local_mid;
+	int rc;
+
+	assert(mosq);
+	assert(topic);
+
+	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
+	if(!packet) return MOSQ_ERR_NOMEM;
+
+	packetlen = 2 + 2+strlen(topic);
+
+	packet->command = UNSUBSCRIBE | (1<<1);
+	packet->remaining_length = packetlen;
+	rc = packet__alloc(packet);
+	if(rc){
+		mosquitto__free(packet);
+		return rc;
+	}
+
+	/* Variable header */
+	local_mid = mosquitto__mid_generate(mosq);
+	if(mid) *mid = (int)local_mid;
+	packet__write_uint16(packet, local_mid);
+
+	/* Payload */
+	packet__write_string(packet, topic, strlen(topic));
+
+#ifdef WITH_BROKER
+# ifdef WITH_BRIDGE
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Bridge %s sending UNSUBSCRIBE (Mid: %d, Topic: %s)", mosq->id, local_mid, topic);
+# endif
+#else
+	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending UNSUBSCRIBE (Mid: %d, Topic: %s)", mosq->id, local_mid, topic);
+#endif
+	return packet__queue(mosq, packet);
+}
+
+
+
+
+--------------------------------------------------------------------------------
+File: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/socks_mosq.c
+Path: /home/fyou/Documents/ported/ur-stack/ur-mavdiscovery/thirdparty/ur-rpc-template/deps/mqtt-client/src/socks_mosq.c
+--------------------------------------------------------------------------------
+/*
+Copyright (c) 2014-2018 Roger Light <roger@atchoo.org>
+
+All rights reserved. This program and the accompanying materials
+are made available under the terms of the Eclipse Public License v1.0
+and Eclipse Distribution License v1.0 which accompany this distribution.
+
+The Eclipse Public License is available at
+   http://www.eclipse.org/legal/epl-v10.html
+and the Eclipse Distribution License is available at
+  http://www.eclipse.org/org/documents/edl-v10.php.
+
+Contributors:
+   Roger Light - initial implementation and documentation.
+*/
+
+#include "config.h"
+
+#include <errno.h>
+#include <string.h>
+#include <limits.h>
+#ifdef WIN32
+#  include <ws2tcpip.h>
+#elif __QNX__
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#else
+#  include <arpa/inet.h>
+#endif
+#ifdef __FreeBSD__
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#endif
+
+#include "mosquitto_internal.h"
+#include "memory_mosq.h"
+#include "net_mosq.h"
+#include "packet_mosq.h"
+#include "send_mosq.h"
+
+#define SOCKS_AUTH_NONE 0x00
+#define SOCKS_AUTH_GSS 0x01
+#define SOCKS_AUTH_USERPASS 0x02
+#define SOCKS_AUTH_NO_ACCEPTABLE 0xFF
+
+#define SOCKS_ATYPE_IP_V4 1 /* four bytes */
+#define SOCKS_ATYPE_DOMAINNAME 3 /* one byte length, followed by fqdn no null, 256 max chars */
+#define SOCKS_ATYPE_IP_V6 4 /* 16 bytes */
+
+#define SOCKS_REPLY_SUCCEEDED 0x00
+#define SOCKS_REPLY_GENERAL_FAILURE 0x01
+#define SOCKS_REPLY_CONNECTION_NOT_ALLOWED 0x02
+#define SOCKS_REPLY_NETWORK_UNREACHABLE 0x03
+#define SOCKS_REPLY_HOST_UNREACHABLE 0x04
+#define SOCKS_REPLY_CONNECTION_REFUSED 0x05
+#define SOCKS_REPLY_TTL_EXPIRED 0x06
+#define SOCKS_REPLY_COMMAND_NOT_SUPPORTED 0x07
+#define SOCKS_REPLY_ADDRESS_TYPE_NOT_SUPPORTED 0x08
+
+int mosquitto_socks5_set(struct mosquitto *mosq, const char *host, int port, const char *username, const char *password)
+{
+#ifdef WITH_SOCKS
+	if(!mosq) return MOSQ_ERR_INVAL;
+	if(!host || strlen(host) > 256) return MOSQ_ERR_INVAL;
+	if(port < 1 || port > 65535) return MOSQ_ERR_INVAL;
+
+	mosquitto__free(mosq->socks5_host);
+	mosq->socks5_host = NULL;
+
+	mosq->socks5_host = mosquitto__strdup(host);
+	if(!mosq->socks5_host){
+		return MOSQ_ERR_NOMEM;
+	}
+
+	mosq->socks5_port = port;
+
+	mosquitto__free(mosq->socks5_username);
+	mosq->socks5_username = NULL;
+
+	mosquitto__free(mosq->socks5_password);
+	mosq->socks5_password = NULL;
+
+	if(username){
+		mosq->socks5_username = mosquitto__strdup(username);
+		if(!mosq->socks5_username){
+			return MOSQ_ERR_NOMEM;
+		}
+
+		if(password){
+			mosq->socks5_password = mosquitto__strdup(password);
+			if(!mosq->socks5_password){
+				mosquitto__free(mosq->socks5_username);
+				return MOSQ_ERR_NOMEM;
+			}
+		}
+	}
+
+	return MOSQ_ERR_SUCCESS;
+#else
+	return MOSQ_ERR_NOT_SUPPORTED;
+#endif
+}
+
+#ifdef WITH_SOCKS
+int socks5__send(struct mosquitto *mosq)
+{
+	struct mosquitto__packet *packet;
+	int slen;
+	int ulen, plen;
+
+	struct in_addr addr_ipv4;
+	struct in6_addr addr_ipv6;
+	int ipv4_pton_result;
+	int ipv6_pton_result;
+
+	if(mosq->state == mosq_cs_socks5_new){
+		packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
+		if(!packet) return MOSQ_ERR_NOMEM;
+
+		if(mosq->socks5_username){
+			packet->packet_length = 4;
+		}else{
+			packet->packet_length = 3;
+		}
+		packet->payload = mosquitto__malloc(sizeof(uint8_t)*packet->packet_length);
+
+		packet->payload[0] = 0x05;
+		if(mosq->socks5_username){
+			packet->payload[1] = 2;
+			packet->payload[2] = SOCKS_AUTH_NONE;
+			packet->payload[3] = SOCKS_AUTH_USERPASS;
+		}else{
+			packet->payload[1] = 1;
+			packet->payload[2] = SOCKS_AUTH_NONE;
+		}
+
+		pthread_mutex_lock(&mosq->state_mutex);
+		mosq->state = mosq_cs_socks5_start;
+		pthread_mutex_unlock(&mosq->state_mutex);
+
+		mosq->in_packet.pos = 0;
+		mosq->in_packet.packet_length = 2;
+		mosq->in_packet.to_process = 2;
+		mosq->in_packet.payload = mosquitto__malloc(sizeof(uint8_t)*2);
+		if(!mosq->in_packet.payload){
+			mosquitto__free(packet->payload);
+			mosquitto__free(packet);
+			return MOSQ_ERR_NOMEM;
+		}
+
+		return packet__queue(mosq, packet);
+	}else if(mosq->state == mosq_cs_socks5_auth_ok){
+		packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
+		if(!packet) return MOSQ_ERR_NOMEM;
+
+		ipv4_pton_result = inet_pton(AF_INET, mosq->host, &addr_ipv4);
+		ipv6_pton_result = inet_pton(AF_INET6, mosq->host, &addr_ipv6);
+
+		if(ipv4_pton_result == 1){
+			packet->packet_length = 10;
+			packet->payload = mosquitto__malloc(sizeof(uint8_t)*packet->packet_length);
+			if(!packet->payload){
+				mosquitto__free(packet);
+				return MOSQ_ERR_NOMEM;
+			}
+			packet->payload[3] = SOCKS_ATYPE_IP_V4;
+			memcpy(&(packet->payload[4]), (const void*)&addr_ipv4, 4);
+			packet->payload[4+4] = MOSQ_MSB(mosq->port);
+			packet->payload[4+4+1] = MOSQ_LSB(mosq->port);
+
+		}else if(ipv6_pton_result == 1){
+			packet->packet_length = 22;
+			packet->payload = mosquitto__malloc(sizeof(uint8_t)*packet->packet_length);
+			if(!packet->payload){
+				mosquitto__free(packet);
+				return MOSQ_ERR_NOMEM;
+			}
+			packet->payload[3] = SOCKS_ATYPE_IP_V6;
+			memcpy(&(packet->payload[4]), (const void*)&addr_ipv6, 16);
+			packet->payload[4+16] = MOSQ_MSB(mosq->port);
+			packet->payload[4+16+1] = MOSQ_LSB(mosq->port);
+
+		}else{
+			slen = strlen(mosq->host);
+			if(slen > UCHAR_MAX){
+				return MOSQ_ERR_NOMEM;
+			}
+			packet->packet_length = 7 + slen;
+			packet->payload = mosquitto__malloc(sizeof(uint8_t)*packet->packet_length);
+			if(!packet->payload){
+				mosquitto__free(packet);
+				return MOSQ_ERR_NOMEM;
+			}
+			packet->payload[3] = SOCKS_ATYPE_DOMAINNAME;
+			packet->payload[4] = (uint8_t)slen;
+			memcpy(&(packet->payload[5]), mosq->host, slen);
+			packet->payload[5+slen] = MOSQ_MSB(mosq->port);
+			packet->payload[6+slen] = MOSQ_LSB(mosq->port);
+		}
+		packet->payload[0] = 0x05;
+		packet->payload[1] = 0x01;
+		packet->payload[2] = 0x00;
+
+		pthread_mutex_lock(&mosq->state_mutex);
+		mosq->state = mosq_cs_socks5_request;
+		pthread_mutex_unlock(&mosq->state_mutex);
+
+		mosq->in_packet.pos = 0;
+		mosq->in_packet.packet_length = 5;
+		mosq->in_packet.to_process = 5;
+		mosq->in_packet.payload = mosquitto__malloc(sizeof(uint8_t)*5);
+		if(!mosq->in_packet.payload){
+			mosquitto__free(packet->payload);
+			mosquitto__free(packet);
+			return MOSQ_ERR_NOMEM;
+		}
+
+		return packet__queue(mosq, packet);
+	}else if(mosq->state == mosq_cs_socks5_send_userpass){
+		packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
+		if(!packet) return MOSQ_ERR_NOMEM;
+
+		ulen = strlen(mosq->socks5_username);
+		plen = strlen(mosq->socks5_password);
+		packet->packet_length = 3 + ulen + plen;
+		packet->payload = mosquitto__malloc(sizeof(uint8_t)*packet->packet_length);
+
+
+		packet->payload[0] = 0x01;
+		packet->payload[1] = ulen;
+		memcpy(&(packet->payload[2]), mosq->socks5_username, ulen);
+		packet->payload[2+ulen] = plen;
+		memcpy(&(packet->payload[3+ulen]), mosq->socks5_password, plen);
+
+		pthread_mutex_lock(&mosq->state_mutex);
+		mosq->state = mosq_cs_socks5_userpass_reply;
+		pthread_mutex_unlock(&mosq->state_mutex);
+
+		mosq->in_packet.pos = 0;
+		mosq->in_packet.packet_length = 2;
+		mosq->in_packet.to_process = 2;
+		mosq->in_packet.payload = mosquitto__malloc(sizeof(uint8_t)*2);
+		if(!mosq->in_packet.payload){
+			mosquitto__free(packet->payload);
+			mosquitto__free(packet);
+			return MOSQ_ERR_NOMEM;
+		}
+
+		return packet__queue(mosq, packet);
+	}
+	return MOSQ_ERR_SUCCESS;
+}
+
+int socks5__read(struct mosquitto *mosq)
+{
+	ssize_t len;
+	uint8_t *payload;
+	uint8_t i;
+
+	if(mosq->state == mosq_cs_socks5_start){
+		while(mosq->in_packet.to_process > 0){
+			len = net__read(mosq, &(mosq->in_packet.payload[mosq->in_packet.pos]), mosq->in_packet.to_process);
+			if(len > 0){
+				mosq->in_packet.pos += len;
+				mosq->in_packet.to_process -= len;
+			}else{
+#ifdef WIN32
+				errno = WSAGetLastError();
+#endif
+				if(errno == EAGAIN || errno == COMPAT_EWOULDBLOCK){
+					return MOSQ_ERR_SUCCESS;
+				}else{
+					packet__cleanup(&mosq->in_packet);
+					switch(errno){
+						case 0:
+							return MOSQ_ERR_PROXY;
+						case COMPAT_ECONNRESET:
+							return MOSQ_ERR_CONN_LOST;
+						default:
+							return MOSQ_ERR_ERRNO;
+					}
+				}
+			}
+		}
+		if(mosq->in_packet.payload[0] != 5){
+			packet__cleanup(&mosq->in_packet);
+			return MOSQ_ERR_PROXY;
+		}
+		switch(mosq->in_packet.payload[1]){
+			case SOCKS_AUTH_NONE:
+				packet__cleanup(&mosq->in_packet);
+				mosq->state = mosq_cs_socks5_auth_ok;
+				return socks5__send(mosq);
+			case SOCKS_AUTH_USERPASS:
+				packet__cleanup(&mosq->in_packet);
+				mosq->state = mosq_cs_socks5_send_userpass;
+				return socks5__send(mosq);
+			default:
+				packet__cleanup(&mosq->in_packet);
+				return MOSQ_ERR_AUTH;
+		}
+	}else if(mosq->state == mosq_cs_socks5_userpass_reply){
+		while(mosq->in_packet.to_process > 0){
+			len = net__read(mosq, &(mosq->in_packet.payload[mosq->in_packet.pos]), mosq->in_packet.to_process);
+			if(len > 0){
+				mosq->in_packet.pos += len;
+				mosq->in_packet.to_process -= len;
+			}else{
+#ifdef WIN32
+				errno = WSAGetLastError();
+#endif
+				if(errno == EAGAIN || errno == COMPAT_EWOULDBLOCK){
+					return MOSQ_ERR_SUCCESS;
+				}else{
+					packet__cleanup(&mosq->in_packet);
+					switch(errno){
+						case 0:
+							return MOSQ_ERR_PROXY;
+						case COMPAT_ECONNRESET:
+							return MOSQ_ERR_CONN_LOST;
+						default:
+							return MOSQ_ERR_ERRNO;
+					}
+				}
+			}
+		}
+		if(mosq->in_packet.payload[0] != 1){
+			packet__cleanup(&mosq->in_packet);
+			return MOSQ_ERR_PROXY;

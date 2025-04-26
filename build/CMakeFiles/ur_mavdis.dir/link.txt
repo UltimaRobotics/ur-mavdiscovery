@@ -1,0 +1,2 @@
+/usr/bin/ar qc libur_mavdis.a CMakeFiles/ur_mavdis.dir/spec/libmavlink.c.o CMakeFiles/ur_mavdis.dir/spec/cssl.c.o CMakeFiles/ur_mavdis.dir/spec/ur-discovery.c.o
+/usr/bin/ranlib libur_mavdis.a

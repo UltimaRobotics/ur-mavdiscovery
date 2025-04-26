@@ -1,0 +1,15 @@
+{
+    "json_added_pubs": {
+        "topics": [
+            "ur-linker-info",
+            "ur-mavrouter-actions",
+            "ur-mavdiscovery-results"
+        ]
+    },
+    "json_added_subs": {
+        "topics": [
+            "ur-mavrouter-results",
+            "ur-mavdiscovery-actions"
+        ]
+    }
+}
