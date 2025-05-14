@@ -1,0 +1,6 @@
+[submodule "thirdparty/ur-rpc-template"]
+	path = thirdparty/ur-rpc-template
+	url = https://github.com/UltimaRobotics/ur-rpc-template.git
+[submodule "thirdparty/ur-threadder-api"]
+	path = thirdparty/ur-threadder-api
+	url = https://github.com/UltimaRobotics/ur-threadder-api.git
